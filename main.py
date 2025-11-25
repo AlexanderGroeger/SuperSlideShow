@@ -1,6 +1,7 @@
 import sys
 from PySide6.QtWidgets import QApplication, QMainWindow, QGraphicsView, QGraphicsScene
 from PySide6.QtCore import Qt, QSizeF
+from PySide6.QtCore import Qt
 from scene import SceneManager
 
 class MainWindow(QMainWindow):
@@ -12,11 +13,16 @@ class MainWindow(QMainWindow):
         self.scene = QGraphicsScene()
         self.view.setScene(self.scene)
         self.setCentralWidget(self.view)
+        
+        # Disable arrow key scrolling in the view
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # View doesn't capture focus
 
         # Load scenes from folder (starts with _default.yaml)
         self.manager = SceneManager("scenes", self.scene, self.resize_video_layer)
 
-        self.view.setFocus()
+        self.setFocus()  # MainWindow gets focus, not the view
 
     def resizeEvent(self, event):
         """Handle window resize - scale all videos in current scene."""
@@ -34,27 +40,27 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event):
         """Handle keyboard input for scene switching and arrow navigation."""
         # Arrow navigation
-        if event.key() == Qt.Key_Up:
+        if event.key() == Qt.Key.Key_Up:
             self.manager.move_arrow_up()
-        elif event.key() == Qt.Key_Down:
+        elif event.key() == Qt.Key.Key_Down:
             self.manager.move_arrow_down()
         
         # Enter key - trigger "select" transition
-        elif event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+        elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             next_scene = self.manager.get_transition("select")
             if next_scene:
                 self.manager.switch_to(next_scene)
         
         # Escape key - trigger "back" transition
-        elif event.key() == Qt.Key_Escape:
+        elif event.key() == Qt.Key.Key_Escape:
             back_scene = self.manager.get_transition("back")
             if back_scene:
                 self.manager.switch_to(back_scene)
         
         # Number keys for direct scene access (optional)
-        elif event.key() == Qt.Key_1:
+        elif event.key() == Qt.Key.Key_1:
             self.manager.switch_to("question1")
-        elif event.key() == Qt.Key_2:
+        elif event.key() == Qt.Key.Key_2:
             self.manager.switch_to("question2")
 
 

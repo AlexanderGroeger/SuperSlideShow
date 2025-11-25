@@ -38,7 +38,11 @@ class Scene:
                 self.active_overlay = overlay
                 break
         
-        # Store transitions to other scenes
+        # Store arrow positions and their scene transitions
+        self.arrow_positions = spec.get("arrow_positions", [])
+        self.current_arrow_index = 0
+        
+        # Store general transitions
         self.transitions = spec.get("transitions", {})
 
     def _handle_video_end(self):
@@ -52,6 +56,12 @@ class Scene:
         # Hide all overlays initially
         for overlay in self.overlays:
             overlay.deactivate()
+        
+        # Reset arrow to first position
+        self.current_arrow_index = 0
+        if self.active_overlay and self.arrow_positions:
+            pos = self.arrow_positions[0]
+            self.active_overlay.move_to(pos["x"], pos["y"])
             
         for vl in self.video_layers:
             vl.play()
@@ -68,14 +78,38 @@ class Scene:
             overlay.deactivate()
 
     def move_arrow_up(self):
-        """Move the active arrow overlay up."""
-        if self.active_overlay and self.active_overlay.visible:
-            self.active_overlay.move_by(0, -60)
+        """Move the active arrow overlay to previous position."""
+        if not self.active_overlay or not self.active_overlay.visible:
+            return
+        
+        if not self.arrow_positions:
+            return
+        
+        # Move to previous position (wrap around)
+        self.current_arrow_index = (self.current_arrow_index - 1) % len(self.arrow_positions)
+        pos = self.arrow_positions[self.current_arrow_index]
+        self.active_overlay.move_to(pos["x"], pos["y"])
 
     def move_arrow_down(self):
-        """Move the active arrow overlay down."""
-        if self.active_overlay and self.active_overlay.visible:
-            self.active_overlay.move_by(0, 60)
+        """Move the active arrow overlay to next position."""
+        if not self.active_overlay or not self.active_overlay.visible:
+            return
+        
+        if not self.arrow_positions:
+            return
+        
+        # Move to next position (wrap around)
+        self.current_arrow_index = (self.current_arrow_index + 1) % len(self.arrow_positions)
+        pos = self.arrow_positions[self.current_arrow_index]
+        self.active_overlay.move_to(pos["x"], pos["y"])
+    
+    def get_selected_scene(self):
+        """Get the scene name for the currently selected arrow position."""
+        if not self.arrow_positions or not self.active_overlay or not self.active_overlay.visible:
+            return None
+        
+        pos = self.arrow_positions[self.current_arrow_index]
+        return pos.get("scene")
 
 
 class SceneManager:
@@ -88,6 +122,7 @@ class SceneManager:
         self.loaded_scenes = {}
         
         self.current_scene = None
+        self.preloaded_scene = None
         
         # Load and start the default scene
         self.switch_to("_default")
@@ -125,10 +160,20 @@ class SceneManager:
             print(f"Failed to switch to scene: {scene_name}")
             return
         
-        # Start new scene BEFORE stopping old one
+        # Preload videos to first frame (but don't play yet)
+        for vl in new_scene.video_layers:
+            vl.preload()
+        
+        # Small delay to ensure video is ready (Qt needs this)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, lambda: self._complete_transition(new_scene))
+    
+    def _complete_transition(self, new_scene: Scene):
+        """Complete the scene transition after preload delay."""
+        # Start new scene
         new_scene.start()
         
-        # Now stop the old scene
+        # Stop old scene immediately after
         if self.current_scene and self.current_scene != new_scene:
             self.current_scene.stop()
         
@@ -147,6 +192,13 @@ class SceneManager:
     
     def get_transition(self, key):
         """Get the scene name for a transition key (e.g., 'select', 'back')."""
+        if key == "select":
+            # For 'select', check if there's a selected arrow position
+            selected = self.current_scene.get_selected_scene()
+            if selected:
+                return selected
+        
+        # Otherwise use general transitions
         if self.current_scene and key in self.current_scene.transitions:
             return self.current_scene.transitions[key]
         return None

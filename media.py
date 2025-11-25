@@ -50,6 +50,11 @@ class VideoLayer(QObject):
                 self.player.setPosition(0)
                 self.player.play()
 
+    def preload(self):
+        """Load video to first frame without playing."""
+        self.item.show()
+        self.player.pause()  # Loads the video but doesn't play
+        
     def play(self):
         self.item.show()
         self.player.play()
