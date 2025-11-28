@@ -2,11 +2,12 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtCore import QUrl, QSizeF, Signal, QObject
 from PySide6.QtWidgets import QGraphicsPixmapItem
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QTransform
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
 
 class VideoLayer(QObject):
-    video_ended = Signal()  # Signal emitted when video ends
+    video_ended = Signal()
+    loop_completed = Signal()
     file_folder = "assets/video/"
 
     def __init__(self, spec: dict, scene, resize_callback):
@@ -20,73 +21,124 @@ class VideoLayer(QObject):
         self.item.setZValue(spec.get("z", 0))
         self.item.setOpacity(spec.get("opacity", 1.0))
 
+        # Set all spec attributes FIRST
+        self.delay = spec.get("delay", 0)
         self.loop = spec.get("loop", False)
+        
         self.file = self.file_folder + spec["file"]
         self.resize_callback = resize_callback
+        self.pending_transition = False
 
         url = QUrl.fromLocalFile(self.file)
         self.player.setSource(url)
         self.player.setVideoOutput(self.item)
 
-        # Handle auto-loop and end detection
         self.player.mediaStatusChanged.connect(self._handle_media_status)
-
-        # Handle size updates
+        self.player.errorOccurred.connect(self._handle_error)
         self.player.videoOutputChanged.connect(lambda _: self._maybe_resize())
-        self.player.playbackStateChanged.connect(lambda _: self._maybe_resize())
         self.player.metaDataChanged.connect(lambda _: self._maybe_resize())
         self.item.nativeSizeChanged.connect(lambda _: self.resize_callback(self))
 
         scene.addItem(self.item)
 
     def _maybe_resize(self):
-        """Ask main window to resize this video layer based on the window size."""
         self.resize_callback(self)
-
+    
+    def _handle_error(self, error, error_string):
+        print(f"VIDEO ERROR: {error} - {error_string}")
+        print(f"Current file: {self.file}")
+    
     def _handle_media_status(self, status):
-        if status == QMediaPlayer.EndOfMedia:
-            self.video_ended.emit()  # Notify scene that video ended
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
             if self.loop:
+                self.loop_completed.emit()
+                
+                if self.pending_transition:
+                    return
+                
                 self.player.setPosition(0)
                 self.player.play()
+            else:
+                self.video_ended.emit()
+    
+    def request_transition(self):
+        self.pending_transition = True
+    
+    def skip_to_end(self):
+        duration = self.player.duration()
+        if duration > 0:
+            self.player.setPosition(duration - 100)
 
     def preload(self):
-        """Load video to first frame without playing."""
         self.item.show()
-        self.player.pause()  # Loads the video but doesn't play
-        
+        self.player.pause()
+    
     def play(self):
         self.item.show()
+        self.pending_transition = False
+        
+        # CRITICAL: Reset position before playing to avoid showing last frame
+        self.player.setPosition(0)
+        
+        if self.delay > 0:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(self.delay, self._delayed_play)
+        else:
+            self.player.play()
+    
+    def _delayed_play(self):
         self.player.play()
 
     def stop(self):
         self.player.stop()
         self.item.hide()
+        # Always reset position when stopping
+        self.player.setPosition(0)
+        self.pending_transition = False
+    
+    def reset_and_reload(self):
+        """Reset video by reloading the source - guarantees position 0."""
+        self.player.stop()
+        url = QUrl.fromLocalFile(self.file)
+        self.player.setSource(url)
+        self.player.setVideoOutput(self.item)
 
 
 class AudioTrack:
-
     file_folder = "assets/audio/"
 
     def __init__(self, spec: dict):
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
-        self.audio_output.setVolume(1.0)  # max volume
-
+        self.audio_output.setVolume(1.0)
         self.player.setAudioOutput(self.audio_output)
 
-        url = QUrl.fromLocalFile(self.file_folder+spec["file"])
+        self.file = self.file_folder + spec["file"]
+        url = QUrl.fromLocalFile(self.file)
         self.player.setSource(url)
 
         self.loop = spec.get("loop", False)
+        self.delay = spec.get("delay", 0)
+        self.start_position = spec.get("start", 0)  # Start position in milliseconds
         self.player.mediaStatusChanged.connect(self._handle_loop)
 
     def _handle_loop(self, status):
-        if status == QMediaPlayer.EndOfMedia and self.loop:
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and self.loop:
             self.player.setPosition(0)
             self.player.play()
 
     def play(self):
+        # Set start position if specified (only when first playing)
+        if self.start_position > 0:
+            self.player.setPosition(self.start_position)
+        
+        if self.delay > 0:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(self.delay, self._delayed_play)
+        else:
+            self.player.play()
+    
+    def _delayed_play(self):
         self.player.play()
 
     def stop(self):
@@ -94,7 +146,6 @@ class AudioTrack:
 
 
 class OverlayLayer:
-
     file_folder = "assets/image/"
 
     def __init__(self, scene, spec):
@@ -104,6 +155,7 @@ class OverlayLayer:
 
         self.pos = spec.get("position", [0, 0])
         self.size = spec.get("size", [50, 50])
+        self.scale_factor = spec.get("scale", 1.0)
         self.scene = scene
 
         if self.type == "arrow":
@@ -112,9 +164,15 @@ class OverlayLayer:
             self.item = QGraphicsPixmapItem(QPixmap(self.file_folder+spec["file"]))
 
         self.item.setPos(*self.pos)
-        self.item.setScale(1.0)
-        self.item.setZValue(100)  # High z-value to appear on top
+        self.item.setZValue(100)
         self.item.setVisible(False)
+        
+        transform = QTransform()
+        transform.scale(self.scale_factor, self.scale_factor)
+        self.item.setTransform(transform)
+        
+        print(f"[OverlayLayer] Created {self.type} at {self.pos} with scale {self.scale_factor}")
+        
         scene.addItem(self.item)
 
     def activate(self):
@@ -126,12 +184,10 @@ class OverlayLayer:
         self.visible = False
 
     def move_to(self, x, y):
-        """Move overlay to a new position."""
         self.pos = [x, y]
         self.item.setPos(x, y)
 
     def move_by(self, dx, dy):
-        """Move overlay by a relative amount."""
         self.pos[0] += dx
         self.pos[1] += dy
         self.item.setPos(*self.pos)

@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
             next_scene = self.manager.get_transition("select")
             if next_scene:
                 self.manager.switch_to(next_scene)
+            # If next_scene is None, the transition was queued for later
         
         # Escape key - trigger "back" transition
         elif event.key() == Qt.Key.Key_Escape:
