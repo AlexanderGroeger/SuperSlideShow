@@ -91,17 +91,14 @@ class VideoLayer(QObject):
 
     def stop(self):
         self.player.stop()
+        self.player.setPosition(0)  # Always reset to 0 when stopping
         self.item.hide()
-        # Always reset position when stopping
-        self.player.setPosition(0)
         self.pending_transition = False
     
     def reset_and_reload(self):
-        """Reset video by reloading the source - guarantees position 0."""
+        """Reset video position to 0."""
         self.player.stop()
-        url = QUrl.fromLocalFile(self.file)
-        self.player.setSource(url)
-        self.player.setVideoOutput(self.item)
+        self.player.setPosition(0)
 
 
 class AudioTrack:
@@ -121,6 +118,9 @@ class AudioTrack:
         self.delay = spec.get("delay", 0)
         self.start_position = spec.get("start", 0)  # Start position in milliseconds
         self.player.mediaStatusChanged.connect(self._handle_loop)
+        
+        # Track pending timer for cancellation
+        self.pending_timer = None
 
     def _handle_loop(self, status):
         if status == QMediaPlayer.MediaStatus.EndOfMedia and self.loop:
@@ -128,21 +128,44 @@ class AudioTrack:
             self.player.play()
 
     def play(self):
+        # Cancel any previous pending timer
+        if self.pending_timer:
+            self.pending_timer.stop()
+            self.pending_timer.deleteLater()
+            self.pending_timer = None
+        
         # Set start position if specified (only when first playing)
         if self.start_position > 0:
             self.player.setPosition(self.start_position)
         
         if self.delay > 0:
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(self.delay, self._delayed_play)
+            self.pending_timer = QTimer()
+            self.pending_timer.setSingleShot(True)
+            self.pending_timer.timeout.connect(self._delayed_play)
+            self.pending_timer.start(self.delay)
         else:
             self.player.play()
     
     def _delayed_play(self):
+        if self.pending_timer:
+            self.pending_timer = None
         self.player.play()
 
     def stop(self):
+        # CRITICAL: Aggressively stop and cancel everything
+        if self.pending_timer:
+            self.pending_timer.stop()
+            try:
+                self.pending_timer.timeout.disconnect()
+            except:
+                pass
+            self.pending_timer.deleteLater()
+            self.pending_timer = None
+        
         self.player.stop()
+        # Also pause to be extra sure
+        self.player.pause()
 
 
 class OverlayLayer:
